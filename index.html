@@ -215,6 +215,8 @@ let currentTab = 'stories';
 let liveAvailable = false;
 let apiBase = '';
 let animTimer5 = null, animTimer8 = null;
+const DEFAULT_TUNNEL = 'https://lawyers-promoting-oaks-drums.trycloudflare.com';
+const PAGES_CFG_URL = 'https://linzx24.github.io/child-pretrain-demo/live_endpoint.json';
 const GIST_API = 'https://api.github.com/gists/a366e56cc68e5915df53ef97c6faf1dc';
 
 async function tryHealth(base) {
@@ -237,22 +239,33 @@ async function tryHealth(base) {
 }
 
 async function probeLiveServer() {
-  if (window.location.protocol.startsWith('http') && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-    if (await tryHealth('')) return;
+  // 1. 若直接从 121 隧道域名或本机 localhost 打开，优先同源直连
+  if (window.location.protocol.startsWith('http') && !window.location.hostname.endsWith('github.io')) {
+    if (await tryHealth('')) return true;
   }
+  // 2. 先试内置当前活跃隧道（零额外请求，秒连）
+  if (await tryHealth(DEFAULT_TUNNEL)) return true;
+  // 3. 再读 GitHub Pages 同源静态指针文件（无 60次/小时 API 限流）
   try {
-    const gRes = await fetch(GIST_API + '?t=' + Date.now(), { cache: 'no-store' });
+    const pRes = await fetch(PAGES_CFG_URL + '?v=' + Date.now(), { cache: 'no-store', mode: 'cors' });
+    if (pRes.ok) {
+      const cfg = await pRes.json();
+      if (cfg.api_base && await tryHealth(cfg.api_base.replace(/\/+$/, ''))) return true;
+    }
+  } catch (e) {}
+  // 4. 兜底读 Gist
+  try {
+    const gRes = await fetch(GIST_API, { cache: 'no-store' });
     if (gRes.ok) {
       const gJson = await gRes.json();
       const rawContent = gJson.files && gJson.files['live_endpoint.json'] && gJson.files['live_endpoint.json'].content;
       if (rawContent) {
         const cfg = JSON.parse(rawContent);
-        if (cfg.api_base) {
-          await tryHealth(cfg.api_base.replace(/\/+$/, ''));
-        }
+        if (cfg.api_base && await tryHealth(cfg.api_base.replace(/\/+$/, ''))) return true;
       }
     }
   } catch (e) {}
+  return false;
 }
 
 function switchTab(tab, btn) {
@@ -401,6 +414,9 @@ async function triggerRun(fromPresetSelect = false) {
 
   // 如果输入未改动且处于预设匹配状态（或离线模式），优先秒回真实实测或走实时推理
   const isExactPreset = item && (inputPrefix === item.prefix.trim());
+  if (!liveAvailable && !isExactPreset) {
+    await probeLiveServer();
+  }
   if (liveAvailable && (!isExactPreset || !fromPresetSelect)) {
     const btn = document.getElementById('runBtn');
     btn.disabled = true;
@@ -432,7 +448,7 @@ async function triggerRun(fromPresetSelect = false) {
   }
 
   if (!isExactPreset && !liveAvailable) {
-    alert('当前以离线单网页模式打开，内置了 84 组验证集真实前缀的完整实测输出。若要对任意自定义新句子实时推理，请在本机运行 run_live_server.py 启动本地 RTX 4060 推理服务！');
+    alert('当前网络连接 121 服务器隧道超时（可稍候再试，或直接访问直连地址 https://lawyers-promoting-oaks-drums.trycloudflare.com ）。目前已先为你展示内置 84 组验证集实测输出。');
     document.getElementById('prefixInput').value = item.prefix;
   }
   const t5 = (mode === 'sample') ? item.y5_sample : item.y5_greedy;
